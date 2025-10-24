@@ -21,6 +21,21 @@ observability, and distribution.
 - **`ace.claude.skills.export_playbook_skill`** packages the evolving playbook
   as a Claude skill folder with a `SKILL.md`, JSON snapshot, and resource docs.
 
+## Architecture Flow
+
+```mermaid
+flowchart TD
+    UI["Slash Commands\n/.claude/commands"] -->|invokes| CLI["ACE CLI Scripts"]
+    CLI -->|start session| Session["ACEClaudeSession\n(ClaudeSDKClient wrapper)"]
+    Session -->|loads| Agents["Agent Definitions\nGenerator / Reflector / Curator"]
+    Session -->|registers| Hooks["Explainability Hooks\n(EvolutionTracker, AttributionAnalyzer, InteractionTracer)"]
+    Session -->|orchestrates| Loop["Adaptation Loop\n(Generator → Environment → Reflector → Curator)"]
+    Loop -->|updates| Playbook["Playbook & Deltas"]
+    Playbook -->|export| Skills["Skill Exporter\n(SKILL.md bundle)"]
+    Hooks -->|emit telemetry| Logging["Structured Logging\n(Stdout/File/Observers)"]
+    Skills -->|distribute| Consumers["Claude Agent Skills\nLoaders & Users"]
+```
+
 ## Slash Commands
 
 The `.claude/commands/` directory defines three documented slash commands:
