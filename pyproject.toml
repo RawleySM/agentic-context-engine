@@ -52,6 +52,7 @@ all = [
     "langchain-litellm>=0.2.0",
     "transformers>=4.0.0",
     "torch>=2.0.0",
+    "claude-agent-sdk>=0.1.0",
 ]
 litellm = [
     "litellm>=1.0.0",
@@ -63,6 +64,9 @@ langchain = [
 transformers = [
     "transformers>=4.0.0",
     "torch>=2.0.0",
+]
+claude = [
+    "claude-agent-sdk>=0.1.0",
 ]
 dev = [
     "pytest>=7.0.0",
@@ -79,7 +83,7 @@ Repository = "https://github.com/Kayba-ai/agentic-context-engine"
 Issues = "https://github.com/Kayba-ai/agentic-context-engine/issues"
 
 [tool.setuptools]
-packages = ["ace", "ace.llm_providers"]
+packages = ["ace", "ace.llm_providers", "ace.claude"]
 
 [tool.setuptools.package-data]
 ace = ["py.typed"]

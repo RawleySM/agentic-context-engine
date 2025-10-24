@@ -19,6 +19,15 @@ from .adaptation import (
     EnvironmentResult,
     AdapterStepResult,
 )
+from .claude import (
+    ACEClaudeSession,
+    ClaudeAgentRuntimeUnavailable,
+    HookMatcher,
+    build_explainability_hooks,
+    create_default_agent_definitions,
+    SkillMetadata,
+    export_playbook_skill,
+)
 
 # Import explainability components
 try:
@@ -66,6 +75,13 @@ __all__ = [
     "TaskEnvironment",
     "EnvironmentResult",
     "AdapterStepResult",
+    "ACEClaudeSession",
+    "ClaudeAgentRuntimeUnavailable",
+    "HookMatcher",
+    "build_explainability_hooks",
+    "create_default_agent_definitions",
+    "SkillMetadata",
+    "export_playbook_skill",
     "EvolutionTracker",
     "AttributionAnalyzer",
     "InteractionTracer",
