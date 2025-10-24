@@ -17,6 +17,7 @@ from .roles import (
     ReflectorOutput,
 )
 from .explainability import EvolutionTracker, AttributionAnalyzer, InteractionTracer
+from .claude import ACEClaudeSession, build_explainability_hooks
 
 
 @dataclass
@@ -113,6 +114,7 @@ class AdapterBase:
         max_refinement_rounds: int = 1,
         reflection_window: int = 3,
         enable_explainability: bool = True,
+        claude_session: Optional[ACEClaudeSession] = None,
     ) -> None:
         self.playbook = playbook or Playbook()
         self.generator = generator
@@ -132,6 +134,21 @@ class AdapterBase:
             self.evolution_tracker = None
             self.attribution_analyzer = None
             self.interaction_tracer = None
+
+        self.claude_session = claude_session
+        if self.claude_session:
+            self.claude_session.register_local_roles(
+                generator=self.generator,
+                reflector=self.reflector,
+                curator=self.curator,
+            )
+            if self.enable_explainability:
+                hooks = build_explainability_hooks(
+                    evolution_tracker=self.evolution_tracker,
+                    attribution_analyzer=self.attribution_analyzer,
+                    interaction_tracer=self.interaction_tracer,
+                )
+                self.claude_session.register_hooks(hooks)
 
     # ------------------------------------------------------------------ #
     # Explainability tracking methods
@@ -310,31 +327,68 @@ class AdapterBase:
         step_index: int,
         total_steps: int,
     ) -> AdapterStepResult:
-        generator_output = self.generator.generate(
-            question=sample.question,
-            context=sample.context,
-            playbook=self.playbook,
-            reflection=self._reflection_context(),
-        )
+        if self.claude_session:
+            generator_output = self.claude_session.run_generator(
+                question=sample.question,
+                context=sample.context,
+                playbook=self.playbook,
+                reflection=self._reflection_context(),
+                sample=sample,
+                epoch=epoch,
+                step=step_index,
+            )
+        else:
+            generator_output = self.generator.generate(
+                question=sample.question,
+                context=sample.context,
+                playbook=self.playbook,
+                reflection=self._reflection_context(),
+            )
         env_result = environment.evaluate(sample, generator_output)
-        reflection = self.reflector.reflect(
-            question=sample.question,
-            generator_output=generator_output,
-            playbook=self.playbook,
-            ground_truth=env_result.ground_truth,
-            feedback=env_result.feedback,
-            max_refinement_rounds=self.max_refinement_rounds,
-        )
+        if self.claude_session:
+            reflection = self.claude_session.run_reflector(
+                question=sample.question,
+                generator_output=generator_output,
+                playbook=self.playbook,
+                ground_truth=env_result.ground_truth,
+                feedback=env_result.feedback,
+                sample=sample,
+                epoch=epoch,
+                step=step_index,
+                max_refinement_rounds=self.max_refinement_rounds,
+            )
+        else:
+            reflection = self.reflector.reflect(
+                question=sample.question,
+                generator_output=generator_output,
+                playbook=self.playbook,
+                ground_truth=env_result.ground_truth,
+                feedback=env_result.feedback,
+                max_refinement_rounds=self.max_refinement_rounds,
+            )
         self._apply_bullet_tags(reflection)
         self._update_recent_reflections(reflection)
-        curator_output = self.curator.curate(
-            reflection=reflection,
-            playbook=self.playbook,
-            question_context=self._question_context(sample, env_result),
-            progress=self._progress_string(
-                epoch, total_epochs, step_index, total_steps
-            ),
-        )
+        if self.claude_session:
+            curator_output = self.claude_session.run_curator(
+                reflection=reflection,
+                playbook=self.playbook,
+                question_context=self._question_context(sample, env_result),
+                progress=self._progress_string(
+                    epoch, total_epochs, step_index, total_steps
+                ),
+                sample=sample,
+                epoch=epoch,
+                step=step_index,
+            )
+        else:
+            curator_output = self.curator.curate(
+                reflection=reflection,
+                playbook=self.playbook,
+                question_context=self._question_context(sample, env_result),
+                progress=self._progress_string(
+                    epoch, total_epochs, step_index, total_steps
+                ),
+            )
 
         # Track explainability data if enabled
         if self.enable_explainability:
@@ -356,6 +410,16 @@ class AdapterBase:
                     'harmful': bullet.harmful,
                     'neutral': bullet.neutral
                 }
+
+        if self.claude_session:
+            self.claude_session.emit_environment_feedback(
+                sample=sample,
+                generator_output=generator_output,
+                environment_result=env_result,
+                epoch=epoch,
+                step=step_index,
+                bullet_metadata=bullet_metadata or None,
+            )
 
         return AdapterStepResult(
             sample=sample,

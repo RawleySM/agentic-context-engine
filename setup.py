@@ -47,6 +47,7 @@ setup(
         "litellm": ["litellm>=1.0.0"],
         "langchain": ["langchain-litellm>=0.2.0", "litellm>=1.0.0"],
         "transformers": ["transformers>=4.0.0", "torch>=2.0.0"],
+        "claude": ["claude-agent-sdk>=0.1.0"],
         "dev": [
             "pytest>=7.0.0",
             "pytest-asyncio>=0.21.0",

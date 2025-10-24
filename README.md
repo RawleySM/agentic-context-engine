@@ -74,6 +74,22 @@ ACE enables agents to learn from execution feedback: what works, what doesn't, a
 
 ---
 
+## Claude Agent SDK Mode
+
+ACE ships with an optional Claude-first runtime:
+
+- `ACEClaudeSession` connects the Generator → Reflector → Curator loop to
+  Claude sub-agents defined with the official `claude-agent-sdk`.
+- Slash commands in `.claude/commands/` expose `/ace-train`, `/ace-evaluate`,
+  and `/ace-playbook` for Claude projects.
+- `scripts/export_playbook_skill.py` packages the evolving playbook into a
+  Claude skill bundle ready for distribution.
+
+See [docs/claude_sdk_integration.md](docs/claude_sdk_integration.md) for
+setup instructions and advanced workflows.
+
+---
+
 ## Demos
 
 ### 🌊 The Seahorse Emoji Challenge
