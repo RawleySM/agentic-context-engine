@@ -10,6 +10,86 @@
 2. Extend ACE's task trajectory logging with SDK-native slash commands, subagents, and skill invocations while preserving current playbook semantics.
 3. Keep the design ready for both offline (batch) and online (live) adapters without breaking existing flows.
 
+## Typed Data Model (Pydantic-first)
+Strongly typed schemas ground the skills loop in predictable contracts that both SDK adapters and inspectors can share. All models below inherit from `pydantic.BaseModel` and default to `model_config = ConfigDict(extra="forbid")` to guard against drift.
+
+```python
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Literal, Optional
+
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl
+
+
+PermissionMode = Literal["plan", "acceptEdits", "bypassPermissions"]
+
+
+class SkillDescriptor(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(description="Unique skill slug used by MCP and slash commands.")
+    version: str = Field(description="Semver string tracked in the registry.")
+    description: str = Field(description="Human-readable summary of the skill.")
+    entrypoint: str = Field(description="Dotted path to the callable bound by @tool.")
+    allowed_tools: list[str] = Field(default_factory=list, description="Subset of tools exposed by the MCP server.")
+
+
+class AgentSessionConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model: Literal["gpt-5", "gpt-4o"] = Field(description="Reasoning model for non-coding phases.")
+    codex_tools_enabled: bool = Field(description="Whether Codex Exec-backed tools are permitted.")
+    permission_mode: PermissionMode = Field(description="SDK permission level.")
+    fork_session: bool = Field(default=False, description="Enable trajectory branching for experiments.")
+    mcp_servers: dict[str, HttpUrl | str] = Field(default_factory=dict, description="Named MCP server endpoints or factory refs.")
+
+
+class SkillOutcome(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    skill_name: str
+    started_at: datetime
+    finished_at: datetime
+    result_summary: str
+    permission_mode: PermissionMode
+    stderr_present: bool
+    artifact_paths: list[str] = Field(default_factory=list)
+
+
+class TranscriptEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    event_type: Literal[
+        "assistant_message",
+        "user_message",
+        "tool_use_block",
+        "tool_result_block",
+        "slash_command",
+        "subagent_stop",
+    ]
+    timestamp: datetime
+    session_id: str
+    task_id: str
+    payload: dict
+    thinking_snippet: Optional[str] = Field(default=None, description="Redacted thinking tokens when available.")
+
+
+class SkillsLoopConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(description="Feature flag for the skills loop.")
+    registry: list[SkillDescriptor]
+    session: AgentSessionConfig
+    hook_logging: bool = Field(default=True, description="Whether to persist hook events to JSONL transcripts.")
+    coverage_thresholds: dict[str, float] = Field(
+        default_factory=lambda: {"branch": 0.8, "lines": 0.85},
+        description="Required coverage ratios for automated tests.",
+    )
+```
+
+The `SkillDescriptor` and `SkillsLoopConfig` objects become the single source of truth for adapter wiring, CLI flag parsing, and inspector validation. Concrete SDK adapters should only accept these Pydantic models to ensure cross-module consistency.
+
 ## Non-goals
 - Replacing ACE's Generator/Reflector/Curator prompts.
 - Building new evaluation environments.
@@ -189,6 +269,8 @@ options = AgentOptions(
 
 ## Detailed Implementation Plan
 
+All adapter entrypoints and CLI surfaces should consume the Pydantic models above. This ensures the SDK wrapper, MCP registry, and inspector serialize/deserialize the same `SkillsLoopConfig` payload without bespoke dict plumbing.
+
 1. **Integration Surface (`ace/integrations/openai_agents.py`)**
    - Create a wrapper around `AgentsClient` providing convenience async methods:
      - `run_task(prompt, playbook, skills_config) -> TaskTrajectory`.
@@ -221,11 +303,12 @@ options = AgentOptions(
 
 6. **Configuration & Flags**
    - Introduce `OpenAIAgentsSkillsConfig` (YAML/JSON) specifying allowed tools, slash commands of interest, and permission escalation rules.
-   - Update CLI scripts to load OpenAI API keys and enable the integration selectively.
+   - Update CLI scripts to load OpenAI API keys and enable the integration selectively. CLI loaders should hydrate a `SkillsLoopConfig` instance and refuse to run when validation fails.
 
 7. **Validation & QA (static)**
    - Develop dry-run routines that spin up `AgentsClient` with stub transports (or recorded transcripts) to ensure ACE can parse messages without hitting the live API.
    - Provide documentation updates summarizing the skills loop workflow and configuration knobs.
+   - Add `SkillsLoopConfig.model_validate_json()` smoke tests to guarantee future spec edits stay backward compatible.
 
 ## Automated Closed Loop: Plan → Build → Test → Review → Document
 
