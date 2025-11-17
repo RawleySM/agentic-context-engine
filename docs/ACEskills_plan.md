@@ -24,6 +24,21 @@
 | **SKILL Query / SKILL Gallery** | Drive the `/openai/skills` loop by configuring `AgentOptions.mcp_servers` with in-process MCP tools built via the documented `@tool` decorator and `create_sdk_mcp_server` helper. |
 | **Delta Skills Items** | Summaries of accepted/rejected skill invocations become structured artifacts that the Curator emits as playbook deltas in addition to traditional textual strategies. |
 
+### Skills Builder Module Directory Guidance
+To keep the skills loop maintainable and discoverable, the skills builder module should mirror the runtime flow with descriptive sub-directories and clear entry points for both humans and agents:
+
+- `ace/skills_builder/README.md` — Top-level explainer that links to the sections below and documents the contract for building and publishing skills.
+- `ace/skills_builder/registry/` — Source of truth for skill metadata, schemas, and versioned descriptors used by the playbook-to-tool compiler.
+- `ace/skills_builder/mcp_servers/` — Houses MCP server factories that wrap registered skills with `create_sdk_mcp_server`; the runtime agent imports from here when wiring `AgentOptions.mcp_servers`.
+- `ace/skills_builder/adapters/` — Shims that connect ACE abstractions (playbooks, trajectories) to OpenAI Agents SDK constructs (`AgentOptions`, `HookMatcher`, `AgentsClient`).
+- `ace/skills_builder/session_entrypoints/` — Developer- and agent-friendly entry points, including:
+  - `dev_cli.py`: CLI for scaffolding skills, previewing tool wiring, and running local smoke tests.
+  - `agent_runtime.py`: Thin wrapper that receives task prompts and initializes the AgentsClient+MCP stack; this is the import target for runtime agents.
+- `ace/skills_builder/examples/` — Minimal, runnable skills that demonstrate idiomatic `@tool` usage and telemetry hooks.
+- `ace/skills_builder/tests/` — Contract tests that assert registry consistency, MCP server startup, and adapter integration.
+
+This layout gives developers a documented on-ramp (`README.md`, `dev_cli.py`) and gives runtime agents deterministic import targets (`agent_runtime.py`, `mcp_servers/`) that align with the skills loop diagrams above.
+
 ## System Diagrams
 
 ### Overall ACE Application with OpenAI Agents Integration
