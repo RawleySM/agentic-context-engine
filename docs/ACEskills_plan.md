@@ -218,10 +218,10 @@ Embed a first-class, automated development loop that exercises the skills sub-lo
 
 ### Loop Overview
 - **Plan**: Use the Generator (via the OpenAI Agents SDK wrapper) with the `gpt-5` model to synthesize a task plan from a high-level objective. Persist the plan as a playbook delta and open a `skills` session with `permission_mode="plan"`.
-- **Build**: Execute the plan by invoking SDK-managed tools (e.g., playbook diff, retrieval) and slash commands. Coding steps are delegated to Codex Exec so tool-backed code edits run in a controlled sandbox. Capture all tool uses as trajectory entries and provisional "Delta Skills Items." 
-- **Test**: Run automated checks (unit tests or dry-run validators) from within the same session using a test runner tool, keeping the model set to Codex Exec for executable steps.
-- **Review**: Route the resulting trajectory through the Reflector/Curator using `gpt-5` for non-coding reasoning. Curators accept or reject deltas, including build/test outcomes, turning them into finalized playbook updates.
-- **Document**: Autogenerate a summary from curated deltas (including test status and rationale) with `gpt-5` and append it to the run transcript plus `docs/` release notes for auditability.
+- **Build**: Execute the plan by invoking SDK-managed tools (e.g., playbook diff, retrieval) and slash commands. Coding steps are delegated to Codex Exec so tool-backed code edits run in a controlled sandbox. Capture all tool uses as trajectory entries and provisional "Delta Skills Items." Mark entries with a `phase=build` tag so later analysis can correlate test failures to specific edits.
+- **Test**: Prefer `python -m pytest -q --maxfail=1 --disable-warnings --json-report` as the default runner executed via a `run_tests` tool using Codex Exec. Enforce coverage floors (e.g., branch ≥ 80%, lines ≥ 85%) and reuse shared fixtures to avoid environment churn. Record the JSON report path and coverage summary as trajectory artifacts. When suites are prohibitively expensive or external resources are unavailable, fall back to dry-run validators (import smoke tests, schema checks) and annotate the delta with `test_mode=dry_run` so curators can gate promotion. Tests inherit the build session context and reuse cached virtualenvs to minimize latency.
+- **Review**: Route the resulting trajectory through the Reflector/Curator using `gpt-5` for non-coding reasoning. Curators accept or reject deltas, including build/test outcomes, turning them into finalized playbook updates. Test artifacts feed curator decisions: failures block Build-tagged deltas, while passing reports raise confidence scores.
+- **Document**: Autogenerate a summary from curated deltas (including test status, coverage thresholds, and rationale) with `gpt-5` and append it to the run transcript plus `docs/` release notes for auditability. Surface links to stored pytest JSON reports so inspectors can replay failures.
 
 ### Automation Hooks
 - Add a `skills_loop_closed_cycle` flag that, when enabled, triggers the loop automatically after the initial plan message, avoiding manual slash commands for each phase.
@@ -234,9 +234,16 @@ Embed a first-class, automated development loop that exercises the skills sub-lo
 
 ### Integration Points
 - **ace/integrations/openai_agents.py**: extend the wrapper with `run_closed_cycle_task(prompt, playbook, config)` to orchestrate the phase transitions, enforce timeouts, and set `permission_mode` per phase (plan → build → test → review).
-- **skills registry**: include a default `run_tests` tool (wrapper around `python -m pytest` or a dry-run validator) so the Test phase can execute without bespoke tooling.
-- **curation**: enhance the Curator to treat phase-tagged deltas specially—e.g., rejecting Build deltas when Test failed—before merging into the playbook.
-- **documentation**: add a `ClosedCycleSummary` emitter that formats the accepted deltas, test results, and permissions escalations into markdown suitable for `docs/` or release notes.
+- **skills registry**: include a default `run_tests` tool that shells out to `python -m pytest -q --maxfail=1 --disable-warnings --json-report` and aggregates coverage thresholds (branch ≥ 80%, lines ≥ 85%) before emitting a `TestResult` trajectory entry. The tool should reuse fixture caches between invocations and write JSON/coverage artifacts to predictable paths for curator consumption. Provide a configuration knob to downgrade to dry-run validators for costly suites; record the fallback in the delta for transparency.
+- **curation**: enhance the Curator to treat phase-tagged deltas specially—e.g., rejecting Build deltas when Test failed—before merging into the playbook. Curators should ingest pytest JSON artifacts to mark deltas as "verified" and surface coverage regressions.
+- **documentation**: add a `ClosedCycleSummary` emitter that formats the accepted deltas, test results, permissions escalations, and artifact links into markdown suitable for `docs/` or release notes. Summaries should link trajectory deltas to their originating pytest reports so reviewers can trace failures back to tool runs.
+
+### Observability and Automation Requirements
+- **Structured logging**: Emit JSON logs with levels (`DEBUG`, `INFO`, `WARN`, `ERROR`) around all `AgentsClient` hooks and tool executions. Each record includes `session_id`, `permission_mode`, `phase`, `tool_name`, `tool_status`, `stderr_count`, and `curator_visibility=true` to ensure inspector parity.
+- **Thinking token exposure**: Capture model thinking tokens in log fields such as `thinking_snippet`, applying masking rules to redact secrets, file paths, and API keys before persistence. Thinking tokens should align with the corresponding trajectory entry id for replay.
+- **Stdout/stderr parity**: Route all stderr/exception streams to stdout during tool runs and hook callbacks so transcripts remain complete. Logs must store a `stderr_present` boolean and include truncated stderr payloads with size limits.
+- **Reliability controls**: Implement retries with exponential backoff for tool failures (e.g., networked mcp servers) and a circuit breaker that pauses tool invocations after repeated stderr bursts within a session. Record breaker state and retry counts in logs for curator awareness.
+- **Log schema fields**: Standardize fields for curator-visible dashboards—`session_id`, `task_id`, `phase`, `permission_mode`, `hook_event`, `tool_name`, `tool_status`, `duration_ms`, `stderr_count`, `artifact_paths`, and `coverage_delta`. Logs should be stored in JSONL to match transcript storage.
 
 ### Acceptance Criteria
 - A single CLI invocation (or SDK flag) can drive the full Plan → Build → Test → Review → Document loop without manual prompts between phases.
