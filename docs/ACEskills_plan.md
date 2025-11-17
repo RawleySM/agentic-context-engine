@@ -104,6 +104,14 @@ The `SkillDescriptor` and `SkillsLoopConfig` objects become the single source of
 | **Delta Skills Items** | Summaries of accepted/rejected skill invocations become structured artifacts that the Curator emits as playbook deltas in addition to traditional textual strategies. |
 | **Delta Trajectory Inspector** | Consume JSONL transcripts (task + skill) to render the combined stream for replay and curation, ensuring that every skills-loop event is visible to the reflector/curator path. |
 
+### codex exec reference details
+Implementation should track the [codex exec documentation](https://raw.githubusercontent.com/openai/codex/main/docs/exec.md) so ACE can mirror the executable's defaults and telemetry:
+- **Non-interactive defaults**: wire non-interactive runs in read-only mode by default, with flags for `--full-auto` and `--sandbox danger-full-access` to permit edits and networked commands when allowed. Enforce the Git repository precondition unless the adapter explicitly opts into `--skip-git-repo-check`.
+- **Output handling**: keep stderr streaming for activity while forwarding only the final message to stdout, and expose `-o/--output-last-message` for consumers that want a deterministic artifact path. Add a JSONL sink that mirrors `codex exec --json` events (`thread.started`, `turn.*`, `item.*`, `error`) so trajectory inspectors can reuse native event types.
+- **Structured output**: surface an `--output-schema` passthrough so codex exec can emit strict JSON objects for downstream automation; allow `-o` to write the structured payload to disk for replay.
+- **Session lifecycle**: enable resumable runs via `resume --last` or specific session ids to keep follow-up tasks in the same conversation context while still allowing model/flag overrides.
+- **Authentication**: support the `CODEX_API_KEY` override in addition to the default Codex CLI/VSCode auth path so skills-loop runs can target the correct tenant.
+
 ### Information Flow Coverage (image parity)
 The annotated diagram introduces several pathways that were only implicit before. The following dataflows must be implemented to keep the skills builder faithful to that diagram:
 
@@ -273,6 +281,7 @@ options = AgentOptions(
 - Call `AgentsClient.get_server_info()` once per session to enumerate server-provided slash commands and present them as ACE "task stubs." Each stub records command metadata so curators can trace which interventions were available.
 - Use `AgentOptions.agents` with documented `AgentDefinition` to preload role-specific subagents (e.g., "Skills Curator," "Trajectory Auditor"). Hook into `SubagentStop` events through the existing hook API (`HookEvent`/`HookMatcher`) to log subagent contributions and terminate sessions cleanly when the diagram's "SKILL Gallery" loop completes.
 - Enable session forking via `AgentOptions.fork_session` for experiments that branch the trajectory when the skills loop diverges.
+- **Custom slash commands**: capture bespoke ACE slash commands (e.g., `/ace/inspect-diff`, `/ace/apply-delta`) in a `SlashCommandConfig` sub-model within `SkillsLoopConfig`. Each entry includes `name`, `description`, `args_schema`, `permission_mode`, and `default_visibility` so `AgentOptions.allowed_slash_commands` can be derived deterministically. Feed these into `AgentOptions.custom_commands` before session start to register with codex exec, and mirror the returned server metadata into the trajectory log with a `command_source=custom` tag. Provide CLI flags (`--slash-command-config path/to/config.json`) that hydrate the config and refuse to start a session when schemas are invalid or the command set conflicts with server-provided defaults. This ensures codex exec exposes the ACE-specific controls while keeping curated audit trails of which custom commands were enabled per run.
 
 ### 4. Hooks, Permissions, and Observability
 - Register `HookEvent.UserPromptSubmit` and `HookEvent.SubagentStop` callbacks so that ACE can:
