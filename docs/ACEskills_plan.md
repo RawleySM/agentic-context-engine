@@ -146,6 +146,16 @@ To keep the skills loop maintainable and discoverable, the skills builder module
 
 This layout gives developers a documented on-ramp (`README.md`, `dev_cli.py`) and gives runtime agents deterministic import targets (`agent_runtime.py`, `runtimes/`) that align with the skills loop diagrams above.
 
+### Agent-tailored slash command contracts
+Custom slash commands are a first-class surface in the skills builder and must be documented per agent to keep the Generator/Reflector/Curator flows reproducible. Each agent gets a dedicated markdown file in `docs/skills_builder/slash_commands/` that is checked into the repo and versioned alongside the playbook:
+
+- `docs/skills_builder/slash_commands/generator.md` — Defines `/plan`, `/scope`, and `/playbook-gap` commands that seed the Generator's planning prompts, list accepted tool contexts, and specify when Codex Exec can auto-expand requirements.
+- `docs/skills_builder/slash_commands/reflector.md` — Documents `/review`, `/hypothesis`, and `/coverage` commands so the Reflector can request codex exec tools for analysis, assert required telemetry fields, and constrain permissions for read-only reviews.
+- `docs/skills_builder/slash_commands/curator.md` — Captures `/accept-delta`, `/reject-delta`, and `/document` commands that gate which skill outcomes make it into curated playbook deltas and what proof (tests, artifacts) is mandatory.
+- `docs/skills_builder/slash_commands/subagent.md` — Enumerates `/delegate`, `/handoff`, and `/converge` commands for ephemeral subagents spun up during the skills loop, including how they inherit session ids and which hooks they must emit.
+
+Every slash command definition must include: the canonical command text, required/optional parameters, the `PermissionMode` expectation, observable side effects (trajectory stubs, JSONL events, expected tool invocations), and completion criteria for closing the command. These markdown files act as the contract tests for the skills builder; adapters should fail fast if a command is invoked without a corresponding definition file, and the inspector should link transcript events back to the specific markdown file.
+
 ## System Diagrams
 
 ### Overall ACE Application with codex exec Integration
