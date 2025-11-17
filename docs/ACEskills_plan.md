@@ -1,32 +1,32 @@
-# Specification: ACE Skills Sub-loop with Claude-Agent-SDK Integration
+# Specification: ACE Skills Sub-loop with OpenAI Agents SDK Integration
 
 ## Background and Current Capabilities
 - ACE orchestrates the Generator, Reflector, and Curator roles through the existing `OfflineAdapter`/`OnlineAdapter` abstractions, persisting strategies in a playbook and supporting Anthropic models via `LiteLLMClient`.
 - Experiments confirm that the tri-agent adaptation loop materially improves downstream quality when tasks and models leave headroom for learning.
-- The proposed Claude Skills detour introduces a `/claude/skills` loop between task generation and trajectory review. The specification below grounds each step of that detour in documented Claude-Agent-SDK primitives.
+- The proposed OpenAI Agents detour introduces a `/openai/skills` loop between task generation and trajectory review. The specification below grounds each step of that detour in documented OpenAI Agents SDK primitives.
 
 ## Goals
-1. Embed a Claude-Agent-SDK driven "Skills Loop" inside the ACE trajectory review so that task deltas can invoke Claude Code skills during reflection and curation.
+1. Embed an OpenAI Agents SDK-driven "Skills Loop" inside the ACE trajectory review so that task deltas can invoke Codex Exec-powered skills during reflection and curation.
 2. Extend ACE's task trajectory logging with SDK-native slash commands, subagents, and skill invocations while preserving current playbook semantics.
 3. Keep the design ready for both offline (batch) and online (live) adapters without breaking existing flows.
 
 ## Non-goals
 - Replacing ACE's Generator/Reflector/Curator prompts.
 - Building new evaluation environments.
-- Shipping production slash-command libraries beyond what the Claude-Agent-SDK already exposes.
+- Shipping production slash-command libraries beyond what the OpenAI Agents SDK already exposes.
 
 ## Architectural Overview
 | Diagram Element | Proposed Implementation |
 | --- | --- |
 | **Context Playbook / Delta Playbook Items** | Maintain as the canonical ACE playbook. New SDK metadata captured during skills runs becomes structured deltas merged via existing curator logic. |
-| **TASK Query / TASK Generator** | Wrap the current Generator call so that prompts are issued through `ClaudeSDKClient` sessions, enabling interactive skill usage instead of simple completions. |
+| **TASK Query / TASK Generator** | Wrap the current Generator call so that prompts are issued through `AgentsClient` sessions, enabling interactive skill usage instead of simple completions. |
 | **TASK Trajectory + TASK STUBER** | Stream SDK messages (assistant, tool-use, result) into ACE's trajectory log. We will create ACE-native "task stubs" from incoming slash-command or subagent events and persist them alongside reasoning text. |
-| **SKILL Query / SKILL Gallery** | Drive the `/claude/skills` loop by configuring `ClaudeAgentOptions.mcp_servers` with in-process MCP tools built via the documented `@tool` decorator and `create_sdk_mcp_server` helper. |
+| **SKILL Query / SKILL Gallery** | Drive the `/openai/skills` loop by configuring `AgentOptions.mcp_servers` with in-process MCP tools built via the documented `@tool` decorator and `create_sdk_mcp_server` helper. |
 | **Delta Skills Items** | Summaries of accepted/rejected skill invocations become structured artifacts that the Curator emits as playbook deltas in addition to traditional textual strategies. |
 
 ## System Diagrams
 
-### Overall ACE Application with Claude Skills Integration
+### Overall ACE Application with OpenAI Agents Integration
 ```mermaid
 graph TD
     subgraph ACE Orchestration
@@ -40,9 +40,9 @@ graph TD
         PB -- context --> G
     end
 
-    subgraph Claude SDK Session
-        CL[ClaudeSDKClient]
-        SK[Claude Skills Loop]
+    subgraph OpenAI Agents Session
+        OA[AgentsClient]
+        SK[OpenAI Skills Loop]
         SC[Slash Commands]
         SA[Subagents]
         TL[Tool Invocations]
@@ -54,9 +54,9 @@ graph TD
     end
 
     AD -- tasks --> G
-    G -- session start --> CL
-    CL -- streaming messages --> TR
-    CL -- invoke --> SK
+    G -- session start --> OA
+    OA -- streaming messages --> TR
+    OA -- invoke --> SK
     SK -- invokes --> TL
     SC -- metadata --> TR
     SA -- scoped actions --> TR
@@ -65,29 +65,29 @@ graph TD
     Inspector -- curated deltas --> C
 ```
 
-### Claude Skills Sub-loop
+### OpenAI Agents Skills Sub-loop
 ```mermaid
 sequenceDiagram
     participant Generator
-    participant ClaudeSDKClient as ClaudeSDKClient
+    participant AgentsClient as AgentsClient
     participant SkillsLoop as Skills MCP Server
     participant Tool as Tool Executor
     participant Curator
 
-    Generator->>ClaudeSDKClient: query(task_prompt)
-    ClaudeSDKClient-->>Generator: assistant reasoning
-    ClaudeSDKClient->>SkillsLoop: register mcp_servers
+    Generator->>AgentsClient: query(task_prompt)
+    AgentsClient-->>Generator: assistant reasoning
+    AgentsClient->>SkillsLoop: register mcp_servers
     SkillsLoop->>Tool: ToolUseBlock(args)
     Tool-->>SkillsLoop: ToolResultBlock(result)
-    SkillsLoop-->>ClaudeSDKClient: tool result stream
-    ClaudeSDKClient-->>Curator: trajectory entries
+    SkillsLoop-->>AgentsClient: tool result stream
+    AgentsClient-->>Curator: trajectory entries
     Curator-->>Curator: map to Delta Skills Items
 ```
 
 ### Observability Flow (Non-Temporal)
 ```mermaid
 graph LR
-    Hooks[Claude SDK Hooks\n(UserPromptSubmit, ToolStart, SubagentStop)] --> Recorder[ACE Event Recorder]
+    Hooks[OpenAI Agents SDK Hooks\n(UserPromptSubmit, ToolStart, SubagentStop)] --> Recorder[ACE Event Recorder]
     Recorder --> JSONL[(JSONL Transcript Store)]
     Recorder --> Metrics[(Telemetry Aggregator)]
     Metrics --> Dashboards[Inspector Metrics Overlay]
@@ -108,25 +108,26 @@ stateDiagram-v2
     SessionClosed --> Idle: finalize transcript & emit summary
 ```
 
-## Key Claude-Agent-SDK Touchpoints
+## Key OpenAI Agents SDK Touchpoints
 
 ### 1. Session & Streaming Control
-- Use `ClaudeSDKClient` for each ACE generator call so that we can send follow-up prompts, inspect tool usage, and fetch slash-command metadata via `get_server_info()`.
+- Use `AgentsClient` for each ACE generator call so that we can send follow-up prompts, inspect tool usage, and fetch slash-command metadata via `get_server_info()`.
 - For one-shot probes (e.g., skill validation without a full chat), fall back to `query()`.
+- Default non-coding reasoning (planning, reflection, curation, documentation) to the `gpt-5` model while routing executable build/test steps through Codex Exec-backed tools for isolated code changes.
 
 ```python
-# Bidirectional session control (Claude Agent SDK docstring for ClaudeSDKClient.set_permission_mode)
-async with ClaudeSDKClient() as client:
+# Bidirectional session control (OpenAI Agents SDK docstring for AgentsClient.set_permission_mode)
+async with AgentsClient() as client:
     await client.query("Help me analyze this codebase")
     await client.set_permission_mode('acceptEdits')
     await client.query("Now implement the fix we discussed")
 ```
 
 ```python
-# One-off streaming query (Claude Agent SDK docstring for query)
+# One-off streaming query (OpenAI Agents SDK docstring for query)
 async for message in query(
     prompt="Create a Python web server",
-    options=ClaudeAgentOptions(
+    options=AgentOptions(
         system_prompt="You are an expert Python developer",
         cwd="/home/user/project",
     ),
@@ -135,10 +136,10 @@ async for message in query(
 ```
 
 ### 2. Skills Integration
-- Define ACE-managed tools with the SDK's `@tool` decorator and bundle them via `create_sdk_mcp_server`. These tools expose existing ACE utilities (e.g., playbook diffing, context fetchers) to Claude Code during task reflection.
+- Define ACE-managed tools with the SDK's `@tool` decorator and bundle them via `create_sdk_mcp_server`. These tools expose existing ACE utilities (e.g., playbook diffing, context fetchers) to Codex Exec during task reflection.
 
 ```python
-# Claude Agent SDK docstring for tool() / create_sdk_mcp_server()
+# OpenAI Agents SDK docstring for tool() / create_sdk_mcp_server()
 @tool("add", "Add two numbers", {"a": float, "b": float})
 async def add_numbers(args):
     result = args["a"] + args["b"]
@@ -149,7 +150,7 @@ calculator = create_sdk_mcp_server(
     version="2.0.0",
     tools=[add_numbers],
 )
-options = ClaudeAgentOptions(
+options = AgentOptions(
     mcp_servers={"calc": calculator},
     allowed_tools=["add"],
 )
@@ -160,9 +161,9 @@ options = ClaudeAgentOptions(
   - When the curator accepts/rejects a skill outcome, translate it into "Delta Skills Items" synchronized with the playbook.
 
 ### 3. Slash Commands & Subagents
-- Call `ClaudeSDKClient.get_server_info()` once per session to enumerate server-provided slash commands and present them as ACE "task stubs." Each stub records command metadata so curators can trace which interventions were available.
-- Use `ClaudeAgentOptions.agents` with documented `AgentDefinition` to preload role-specific subagents (e.g., "Skills Curator," "Trajectory Auditor"). Hook into `SubagentStop` events through the existing hook API (`HookEvent`/`HookMatcher`) to log subagent contributions and terminate sessions cleanly when the diagram's "SKILL Gallery" loop completes.
-- Enable session forking via `ClaudeAgentOptions.fork_session` for experiments that branch the trajectory when the skills loop diverges.
+- Call `AgentsClient.get_server_info()` once per session to enumerate server-provided slash commands and present them as ACE "task stubs." Each stub records command metadata so curators can trace which interventions were available.
+- Use `AgentOptions.agents` with documented `AgentDefinition` to preload role-specific subagents (e.g., "Skills Curator," "Trajectory Auditor"). Hook into `SubagentStop` events through the existing hook API (`HookEvent`/`HookMatcher`) to log subagent contributions and terminate sessions cleanly when the diagram's "SKILL Gallery" loop completes.
+- Enable session forking via `AgentOptions.fork_session` for experiments that branch the trajectory when the skills loop diverges.
 
 ### 4. Hooks, Permissions, and Observability
 - Register `HookEvent.UserPromptSubmit` and `HookEvent.SubagentStop` callbacks so that ACE can:
@@ -173,8 +174,8 @@ options = ClaudeAgentOptions(
 
 ## Detailed Implementation Plan
 
-1. **Integration Surface (`ace/integrations/claude_sdk.py`)**
-   - Create a wrapper around `ClaudeSDKClient` providing convenience async methods:
+1. **Integration Surface (`ace/integrations/openai_agents.py`)**
+   - Create a wrapper around `AgentsClient` providing convenience async methods:
      - `run_task(prompt, playbook, skills_config) -> TaskTrajectory`.
      - `fetch_server_commands(session) -> list[CommandDescriptor]`.
    - Convert SDK `Message` variants (`AssistantMessage`, `UserMessage`, `ToolUseBlock`, `ResultMessage`) into ACE trajectory entries.
@@ -189,7 +190,7 @@ options = ClaudeAgentOptions(
 3. **Task Loop Augmentation**
    - Replace the Generator's direct LLM call with the new SDK wrapper when the "skills loop" feature flag is enabled. Preserve legacy path as fallback.
    - On each sample:
-     1. Start a `ClaudeSDKClient` session seeded with ACE system prompt and current playbook summary.
+     1. Start an `AgentsClient` session seeded with ACE system prompt and current playbook summary.
      2. Send the task prompt via `client.query`.
      3. Drain `client.receive_response()`; record assistant reasoning, tool usage, slash commands, and result metadata.
      4. If the SDK yields `ResultMessage`, finalize the trajectory and hand to Reflector.
@@ -204,15 +205,46 @@ options = ClaudeAgentOptions(
    - Configure optional `AgentDefinition` entries for specialized subagents (e.g., `/plan`, `/reflect`). Use `HookEvent.SubagentStop` to track when the SDK forks or terminates a subagent loop, recording outcomes as part of the trajectory.
 
 6. **Configuration & Flags**
-   - Introduce `ClaudeSkillsConfig` (YAML/JSON) specifying allowed tools, slash commands of interest, and permission escalation rules.
-   - Update CLI scripts to load Claude API keys and enable the integration selectively.
+   - Introduce `OpenAIAgentsSkillsConfig` (YAML/JSON) specifying allowed tools, slash commands of interest, and permission escalation rules.
+   - Update CLI scripts to load OpenAI API keys and enable the integration selectively.
 
 7. **Validation & QA (static)**
-   - Develop dry-run routines that spin up `ClaudeSDKClient` with stub transports (or recorded transcripts) to ensure ACE can parse messages without hitting the live API.
+   - Develop dry-run routines that spin up `AgentsClient` with stub transports (or recorded transcripts) to ensure ACE can parse messages without hitting the live API.
    - Provide documentation updates summarizing the skills loop workflow and configuration knobs.
 
+## Automated Closed Loop: Plan → Build → Test → Review → Document
+
+Embed a first-class, automated development loop that exercises the skills sub-loop end-to-end while producing artifacts ready for curator review.
+
+### Loop Overview
+- **Plan**: Use the Generator (via the OpenAI Agents SDK wrapper) with the `gpt-5` model to synthesize a task plan from a high-level objective. Persist the plan as a playbook delta and open a `skills` session with `permission_mode="plan"`.
+- **Build**: Execute the plan by invoking SDK-managed tools (e.g., playbook diff, retrieval) and slash commands. Coding steps are delegated to Codex Exec so tool-backed code edits run in a controlled sandbox. Capture all tool uses as trajectory entries and provisional "Delta Skills Items." 
+- **Test**: Run automated checks (unit tests or dry-run validators) from within the same session using a test runner tool, keeping the model set to Codex Exec for executable steps.
+- **Review**: Route the resulting trajectory through the Reflector/Curator using `gpt-5` for non-coding reasoning. Curators accept or reject deltas, including build/test outcomes, turning them into finalized playbook updates.
+- **Document**: Autogenerate a summary from curated deltas (including test status and rationale) with `gpt-5` and append it to the run transcript plus `docs/` release notes for auditability.
+
+### Automation Hooks
+- Add a `skills_loop_closed_cycle` flag that, when enabled, triggers the loop automatically after the initial plan message, avoiding manual slash commands for each phase.
+- Register hook callbacks to checkpoint after each phase:
+  - `HookEvent.SubagentStop` or `ResultMessage` for the **Plan** phase (plan artifact captured).
+  - `ToolResultBlock` events for the **Build/Test** phases (build logs and test outputs).
+  - Curator decision events for the **Review** phase (accepted/rejected deltas).
+  - A final transcript writer for the **Document** phase (summary + links to deltas and test artifacts).
+- Surface phase progress in the trajectory log (phase tags per entry) so the inspector can render phase timelines and failures clearly.
+
+### Integration Points
+- **ace/integrations/openai_agents.py**: extend the wrapper with `run_closed_cycle_task(prompt, playbook, config)` to orchestrate the phase transitions, enforce timeouts, and set `permission_mode` per phase (plan → build → test → review).
+- **skills registry**: include a default `run_tests` tool (wrapper around `python -m pytest` or a dry-run validator) so the Test phase can execute without bespoke tooling.
+- **curation**: enhance the Curator to treat phase-tagged deltas specially—e.g., rejecting Build deltas when Test failed—before merging into the playbook.
+- **documentation**: add a `ClosedCycleSummary` emitter that formats the accepted deltas, test results, and permissions escalations into markdown suitable for `docs/` or release notes.
+
+### Acceptance Criteria
+- A single CLI invocation (or SDK flag) can drive the full Plan → Build → Test → Review → Document loop without manual prompts between phases.
+- Trajectory transcripts show phase-tagged entries, tool invocations, and test outputs, and the inspector can filter by phase.
+- Curated deltas from the loop are exportable as playbook patches plus a documentation snippet.
+
 ## Risks & Mitigations
-- **SDK evolution**: Track `claude-agent-sdk` releases; encapsulate all imports in `ace/integrations/claude_sdk.py` for easy patching.
+- **SDK evolution**: Track OpenAI Agents SDK releases; encapsulate all imports in `ace/integrations/openai_agents.py` for easy patching.
 - **Tool/permission deadlocks**: Enforce timeouts on tool invocations and default to `permission_mode="plan"` for automation.
 - **Telemetry volume**: Because SDK streaming can be verbose, add filters so only relevant tool/slash-command events feed into the playbook deltas.
 
@@ -224,7 +256,7 @@ options = ClaudeAgentOptions(
 ## Minimal Viable Solution: ACE Skills Session Inspector
 
 ### Purpose
-Provide a fast, inspectable view of Claude Agent SDK skill loops that is more informative than raw terminal logs. The inspector highlights tool invocations, slash commands, and subagent hops within an ACE trajectory so curators can replay decisions and extract deltas efficiently.
+Provide a fast, inspectable view of OpenAI Agents SDK skill loops that is more informative than raw terminal logs. The inspector highlights tool invocations, slash commands, and subagent hops within an ACE trajectory so curators can replay decisions and extract deltas efficiently.
 
 ### User Experience Overview
 1. **Launch** the inspector with a single command (`python -m ace.tools.skills_inspector transcript.jsonl`).
@@ -242,7 +274,7 @@ The UI is built with the [`textual` TUI framework](https://textual.textualize.io
 +----------------------+        +---------------------------+
 | ACE run (skills loop)|        | docs/transcripts/*.jsonl |
 | writes transcript via|        | structured SDK messages   |
-| ClaudeSDKClient hooks |-----> | (JSONL storage)           |
+| AgentsClient hooks   |-----> | (JSONL storage)           |
 +----------------------+        +---------------------------+
            |                                    |
            v                                    v
@@ -255,15 +287,15 @@ The UI is built with the [`textual` TUI framework](https://textual.textualize.io
 ```
 
 #### Data Model
-- **SessionModel**: wraps `ClaudeSDKClient` transcripts captured through ACE hooks (`HookEvent.UserPromptSubmit`, `HookEvent.SubagentStop`, `HookEvent.ToolStart`).
+- **SessionModel**: wraps `AgentsClient` transcripts captured through ACE hooks (`HookEvent.UserPromptSubmit`, `HookEvent.SubagentStop`, `HookEvent.ToolStart`).
 - **EventRecord**: normalized schema containing `event_type`, `timestamp`, `sdk_block` payload, and curator tags.
 - **SkillOutcome**: derived from `ToolUseBlock` + `ToolResultBlock` pairs, enriched with `permission_mode` and `AgentDefinition` metadata at execution time.
 
 #### Data Source
-- Reuse the Claude SDK streaming callbacks introduced earlier: call `client.get_server_info()` at session start, store the result, and mirror every streamed `Message` into a JSONL transcript. Example hook registration:
+- Reuse the OpenAI Agents SDK streaming callbacks introduced earlier: call `client.get_server_info()` at session start, store the result, and mirror every streamed `Message` into a JSONL transcript. Example hook registration:
 
 ```python
-from claude_sdk.hooks import HookEvent
+from openai_agents_sdk.hooks import HookEvent
 
 sdk_client.add_hook(HookEvent.UserPromptSubmit, record_event)
 sdk_client.add_hook(HookEvent.ToolStart, record_event)
@@ -287,8 +319,8 @@ Internally, the CLI:
 
 ### Minimal Implementation Steps
 1. **Transcript Capture**
-   - Extend `ace/integrations/claude_sdk.py` to write JSONL transcripts when the skills feature flag is enabled.
-   - Ensure we capture `ClaudeAgentOptions.agents`, `allowed_tools`, and `permission_mode` per session header.
+   - Extend `ace/integrations/openai_agents.py` to write JSONL transcripts when the skills feature flag is enabled.
+   - Ensure we capture `AgentOptions.agents`, `allowed_tools`, and `permission_mode` per session header.
 
 2. **Inspector CLI**
    - Add `ace/tools/skills_inspector.py` implementing:
@@ -301,7 +333,7 @@ Internally, the CLI:
 
 ### Why This Beats Raw Logs
 - **Structured filtering**: toggle to view only tool failures, slash commands, or subagent activity.
-- **Replay fidelity**: reconstructs the exact order of `ClaudeSDKClient` events with metadata, avoiding loss in noisy terminal streams.
+- **Replay fidelity**: reconstructs the exact order of `AgentsClient` events with metadata, avoiding loss in noisy terminal streams.
 - **Curator workflow**: integrates export actions for deltas, letting curators update the playbook without leaving the inspector.
 - **Extensible**: we can later add a WebSocket backend or React UI without changing the transcript schema.
 
