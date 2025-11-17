@@ -28,11 +28,11 @@ PermissionMode = Literal["plan", "acceptEdits", "bypassPermissions"]
 class SkillDescriptor(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    name: str = Field(description="Unique skill slug used by MCP and slash commands.")
+    name: str = Field(description="Unique skill slug used by slash commands.")
     version: str = Field(description="Semver string tracked in the registry.")
     description: str = Field(description="Human-readable summary of the skill.")
     entrypoint: str = Field(description="Dotted path to the callable bound by @tool.")
-    allowed_tools: list[str] = Field(default_factory=list, description="Subset of tools exposed by the MCP server.")
+    allowed_tools: list[str] = Field(default_factory=list, description="Subset of tools exposed by the skills runtime.")
 
 
 class AgentSessionConfig(BaseModel):
@@ -42,7 +42,6 @@ class AgentSessionConfig(BaseModel):
     codex_tools_enabled: bool = Field(description="Whether Codex Exec-backed tools are permitted.")
     permission_mode: PermissionMode = Field(description="SDK permission level.")
     fork_session: bool = Field(default=False, description="Enable trajectory branching for experiments.")
-    mcp_servers: dict[str, HttpUrl | str] = Field(default_factory=dict, description="Named MCP server endpoints or factory refs.")
 
 
 class SkillOutcome(BaseModel):
@@ -101,7 +100,7 @@ The `SkillDescriptor` and `SkillsLoopConfig` objects become the single source of
 | **Context Playbook / Delta Playbook Items** | Maintain as the canonical ACE playbook. New SDK metadata captured during skills runs becomes structured deltas merged via existing curator logic. |
 | **TASK Query / TASK Generator** | Wrap the current Generator call so that prompts are issued through the codex exec executable sessions, enabling interactive skill usage instead of simple completions. |
 | **TASK Trajectory + TASK STUBER** | Stream executable messages (assistant, tool-use, result) into ACE's trajectory log. We will create ACE-native "task stubs" from incoming slash-command or subagent events and persist them alongside reasoning text. |
-| **SKILL Query / SKILL Gallery** | Drive the `/openai/skills` loop by configuring `AgentOptions.mcp_servers` with in-process MCP tools built via the codex exec executable and `create_sdk_mcp_server` helper. |
+| **SKILL Query / SKILL Gallery** | Drive the `/openai/skills` loop by configuring codex exec skill packs built with the executable's tool helpers and wiring them into `AgentOptions.allowed_tools`. |
 | **Delta Skills Items** | Summaries of accepted/rejected skill invocations become structured artifacts that the Curator emits as playbook deltas in addition to traditional textual strategies. |
 | **Delta Trajectory Inspector** | Consume JSONL transcripts (task + skill) to render the combined stream for replay and curation, ensuring that every skills-loop event is visible to the reflector/curator path. |
 
@@ -110,10 +109,10 @@ The annotated diagram introduces several pathways that were only implicit before
 
 1. **Delta intake → Skills Loop**
    - The curator selects a pending delta (or playbook gap) and forwards a `DeltaInput` record into the skills loop through the Generator wrapper. The record contains the delta id, rationale, and the originating playbook section so the plan/build/test steps know where to apply edits.
-   - `AgentOptions.mcp_servers` receives this `DeltaInput` as part of the system prompt, and the initial `query()` call emits a `TaskStub` entry tagged `source=delta` so the trajectory shows which delta was targeted.
+   - `AgentOptions` receives this `DeltaInput` as part of the system prompt, and the initial `query()` call emits a `TaskStub` entry tagged `source=delta` so the trajectory shows which delta was targeted.
 
 2. **Skill loop entry/exit wiring**
-   - The **enter SKILL LOOP** hop in the diagram maps to a dedicated `enter_skill_loop()` helper in `ace/integrations/codex_exec.py`. It seeds the MCP stack, captures `get_server_info()` metadata (slash commands + subagents), and writes a `SkillsSessionOpened` transcript header that ties subsequent tool runs back to the originating task id.
+   - The **enter SKILL LOOP** hop in the diagram maps to a dedicated `enter_skill_loop()` helper in `ace/integrations/codex_exec.py`. It seeds the skills tool stack, captures `get_server_info()` metadata (slash commands + subagents), and writes a `SkillsSessionOpened` transcript header that ties subsequent tool runs back to the originating task id.
    - The **Delta Output** arrow is realized by converting accepted `SkillOutcome` records into `DeltaSkillsItem` structures. These are appended to both the trajectory (`phase=review`) and to the curated playbook delta log so the next ACE run can rehydrate them.
 
 3. **Task stubber ↔ inspector feedback**
@@ -129,15 +128,15 @@ To keep the skills loop maintainable and discoverable, the skills builder module
 
 - `ace/skills_builder/README.md` — Top-level explainer that links to the sections below and documents the contract for building and publishing skills.
 - `ace/skills_builder/registry/` — Source of truth for skill metadata, schemas, and versioned descriptors used by the playbook-to-tool compiler.
-- `ace/skills_builder/mcp_servers/` — Houses MCP server factories that wrap registered skills with `create_sdk_mcp_server`; the runtime agent imports from here when wiring `AgentOptions.mcp_servers`.
+- `ace/skills_builder/runtimes/` — Houses skill runtime factories that wrap registered skills with codex exec helpers; the runtime agent imports from here when wiring `AgentOptions`.
 - `ace/skills_builder/adapters/` — Shims that connect ACE abstractions (playbooks, trajectories) to codex exec constructs (`AgentOptions`, `HookMatcher`, `AgentsClient`).
 - `ace/skills_builder/session_entrypoints/` — Developer- and agent-friendly entry points, including:
   - `dev_cli.py`: CLI for scaffolding skills, previewing tool wiring, and running local smoke tests.
-  - `agent_runtime.py`: Thin wrapper that receives task prompts and initializes the AgentsClient+MCP stack; this is the import target for runtime agents.
+  - `agent_runtime.py`: Thin wrapper that receives task prompts and initializes the AgentsClient plus skills runtime; this is the import target for runtime agents.
 - `ace/skills_builder/examples/` — Minimal, runnable skills that demonstrate idiomatic `@tool` usage and telemetry hooks.
-- `ace/skills_builder/tests/` — Contract tests that assert registry consistency, MCP server startup, and adapter integration.
+- `ace/skills_builder/tests/` — Contract tests that assert registry consistency, skills runtime startup, and adapter integration.
 
-This layout gives developers a documented on-ramp (`README.md`, `dev_cli.py`) and gives runtime agents deterministic import targets (`agent_runtime.py`, `mcp_servers/`) that align with the skills loop diagrams above.
+This layout gives developers a documented on-ramp (`README.md`, `dev_cli.py`) and gives runtime agents deterministic import targets (`agent_runtime.py`, `runtimes/`) that align with the skills loop diagrams above.
 
 ## System Diagrams
 
@@ -185,13 +184,13 @@ graph TD
 sequenceDiagram
     participant Generator
     participant AgentsClient as AgentsClient
-    participant SkillsLoop as Skills MCP Server
+    participant SkillsLoop as Skills Runtime
     participant Tool as Tool Executor
     participant Curator
 
     Generator->>AgentsClient: query(task_prompt)
     AgentsClient-->>Generator: assistant reasoning
-    AgentsClient->>SkillsLoop: register mcp_servers
+    AgentsClient->>SkillsLoop: register skill runtimes
     SkillsLoop->>Tool: ToolUseBlock(args)
     Tool-->>SkillsLoop: ToolResultBlock(result)
     SkillsLoop-->>AgentsClient: tool result stream
@@ -251,22 +250,17 @@ async for message in query(
 ```
 
 ### 2. Skills Integration
-- Define ACE-managed tools with the executable's `@tool` decorator and bundle them via `create_sdk_mcp_server`. These tools expose existing ACE utilities (e.g., playbook diffing, context fetchers) to Codex Exec during task reflection.
+- Define ACE-managed tools with the executable's `@tool` decorator and register them directly with the skills runtime. These tools expose existing ACE utilities (e.g., playbook diffing, context fetchers) to Codex Exec during task reflection.
 
 ```python
-# codex exec docstring for tool() / create_sdk_mcp_server()
+# codex exec docstring for tool()
 @tool("add", "Add two numbers", {"a": float, "b": float})
 async def add_numbers(args):
     result = args["a"] + args["b"]
     return {"content": [{"type": "text", "text": f"Result: {result}"}]}
 
-calculator = create_sdk_mcp_server(
-    name="calculator",
-    version="2.0.0",
-    tools=[add_numbers],
-)
 options = AgentOptions(
-    mcp_servers={"calc": calculator},
+    tools=[add_numbers],
     allowed_tools=["add"],
 )
 ```
@@ -289,7 +283,7 @@ options = AgentOptions(
 
 ## Detailed Implementation Plan
 
-All adapter entrypoints and CLI surfaces should consume the Pydantic models above. This ensures the executable wrapper, MCP registry, and inspector serialize/deserialize the same `SkillsLoopConfig` payload without bespoke dict plumbing.
+All adapter entrypoints and CLI surfaces should consume the Pydantic models above. This ensures the executable wrapper, skills registry, and inspector serialize/deserialize the same `SkillsLoopConfig` payload without bespoke dict plumbing.
 
 1. **Integration Surface (`ace/integrations/codex_exec.py`)**
    - Create a wrapper around `AgentsClient` providing convenience async methods:
@@ -298,7 +292,7 @@ All adapter entrypoints and CLI surfaces should consume the Pydantic models abov
    - Convert SDK `Message` variants (`AssistantMessage`, `UserMessage`, `ToolUseBlock`, `ResultMessage`) into ACE trajectory entries.
 
 2. **Skills Configuration**
-   - Build an `AceSkillRegistry` translating playbook deltas into executable MCP tools using the documented `@tool` decorator pattern.
+   - Build an `AceSkillRegistry` translating playbook deltas into executable tools using the documented `@tool` decorator pattern.
    - Provide default tools for:
      - Playbook diff inspection.
      - Task stub generation (diagram's "TASK STUBER").
@@ -360,7 +354,7 @@ Embed a first-class, automated development loop that exercises the skills sub-lo
 - **Structured logging**: Emit JSON logs with levels (`DEBUG`, `INFO`, `WARN`, `ERROR`) around all `AgentsClient` hooks and tool executions. Each record includes `session_id`, `permission_mode`, `phase`, `tool_name`, `tool_status`, `stderr_count`, and `curator_visibility=true` to ensure inspector parity.
 - **Thinking token exposure**: Capture model thinking tokens in log fields such as `thinking_snippet`, applying masking rules to redact secrets, file paths, and API keys before persistence. Thinking tokens should align with the corresponding trajectory entry id for replay.
 - **Stdout/stderr parity**: Route all stderr/exception streams to stdout during tool runs and hook callbacks so transcripts remain complete. Logs must store a `stderr_present` boolean and include truncated stderr payloads with size limits.
-- **Reliability controls**: Implement retries with exponential backoff for tool failures (e.g., networked mcp servers) and a circuit breaker that pauses tool invocations after repeated stderr bursts within a session. Record breaker state and retry counts in logs for curator awareness.
+- **Reliability controls**: Implement retries with exponential backoff for tool failures (e.g., networked skills runtimes) and a circuit breaker that pauses tool invocations after repeated stderr bursts within a session. Record breaker state and retry counts in logs for curator awareness.
 - **Log schema fields**: Standardize fields for curator-visible dashboards—`session_id`, `task_id`, `phase`, `permission_mode`, `hook_event`, `tool_name`, `tool_status`, `duration_ms`, `stderr_count`, `artifact_paths`, and `coverage_delta`. Logs should be stored in JSONL to match transcript storage.
 
 ### Acceptance Criteria
