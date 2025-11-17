@@ -103,6 +103,26 @@ The `SkillDescriptor` and `SkillsLoopConfig` objects become the single source of
 | **TASK Trajectory + TASK STUBER** | Stream executable messages (assistant, tool-use, result) into ACE's trajectory log. We will create ACE-native "task stubs" from incoming slash-command or subagent events and persist them alongside reasoning text. |
 | **SKILL Query / SKILL Gallery** | Drive the `/openai/skills` loop by configuring `AgentOptions.mcp_servers` with in-process MCP tools built via the codex exec executable and `create_sdk_mcp_server` helper. |
 | **Delta Skills Items** | Summaries of accepted/rejected skill invocations become structured artifacts that the Curator emits as playbook deltas in addition to traditional textual strategies. |
+| **Delta Trajectory Inspector** | Consume JSONL transcripts (task + skill) to render the combined stream for replay and curation, ensuring that every skills-loop event is visible to the reflector/curator path. |
+
+### Information Flow Coverage (image parity)
+The annotated diagram introduces several pathways that were only implicit before. The following dataflows must be implemented to keep the skills builder faithful to that diagram:
+
+1. **Delta intake → Skills Loop**
+   - The curator selects a pending delta (or playbook gap) and forwards a `DeltaInput` record into the skills loop through the Generator wrapper. The record contains the delta id, rationale, and the originating playbook section so the plan/build/test steps know where to apply edits.
+   - `AgentOptions.mcp_servers` receives this `DeltaInput` as part of the system prompt, and the initial `query()` call emits a `TaskStub` entry tagged `source=delta` so the trajectory shows which delta was targeted.
+
+2. **Skill loop entry/exit wiring**
+   - The **enter SKILL LOOP** hop in the diagram maps to a dedicated `enter_skill_loop()` helper in `ace/integrations/codex_exec.py`. It seeds the MCP stack, captures `get_server_info()` metadata (slash commands + subagents), and writes a `SkillsSessionOpened` transcript header that ties subsequent tool runs back to the originating task id.
+   - The **Delta Output** arrow is realized by converting accepted `SkillOutcome` records into `DeltaSkillsItem` structures. These are appended to both the trajectory (`phase=review`) and to the curated playbook delta log so the next ACE run can rehydrate them.
+
+3. **Task stubber ↔ inspector feedback**
+   - When the diagram shows the TASK STUBER and Delta Trajectory Inspector connected, mirror each slash command, tool start/finish, and subagent stop into the JSONL transcript with a `stub_ref` pointing to the originating delta/task. The inspector consumes these references to reconstruct the ordered stream (task reasoning → skill invocations → curator decisions) and to render the state machine in the image (PLAN → BUILD → TEST → REVIEW → DOCUMENT).
+   - Any missing metadata (e.g., test artifact paths, permission escalations) must be backfilled before closing the skills session so the inspector can draw the full pathway without guessing.
+
+4. **Loop lifecycle and retries**
+   - The Plan/Build/Test/Review/Document state machine in the image is enforced by tagging each transcript event with `phase` and emitting explicit `PhaseTransition` records. Failed BUILD or TEST steps loop back to PLAN with a `retry_count` increment and the prior tool stderr attached. Curators can then see that a retry happened, matching the diagram's branching arrows.
+   - The loop closes only after the DOCUMENT phase emits a `DeltaOutputFinalized` record tying the curated delta to the updated playbook section. This guarantees the outward arrows (to Delta Playbook and Task Trajectory) have concrete payloads.
 
 ### Skills Builder Module Directory Guidance
 To keep the skills loop maintainable and discoverable, the skills builder module should mirror the runtime flow with descriptive sub-directories and clear entry points for both humans and agents:
